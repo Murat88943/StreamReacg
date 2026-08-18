@@ -1,0 +1,30 @@
+version: '3.8'
+
+services:
+  parser:
+    build:
+      context: .
+      dockerfile: Dockerfile.parser
+    container_name: streamreach_parser
+    volumes:
+      - ./parser/data:/app/parser/data
+      - ./parser/config.json:/app/parser/config.json
+    networks:
+      - streamreach_network
+
+  mailer:
+    build:
+      context: .
+      dockerfile: Dockerfile.mailer
+    container_name: streamreach_mailer
+    volumes:
+      - ./parser/data:/app/parser/data
+      - ./mailers/templates.json:/app/mailers/templates.json
+    networks:
+      - streamreach_network
+    depends_on:
+      - parser
+
+networks:
+  streamreach_network:
+    driver: bridge

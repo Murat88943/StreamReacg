@@ -4,7 +4,9 @@ import os
 import re
 import time
 
-with open("config.json", "r", encoding="utf-8") as file:
+script_dir = os.path.dirname(os.path.abspath(__file__))
+
+with open(os.path.join(script_dir, "config.json"), "r", encoding="utf-8") as file:
     headers = json.load(file)
 
 base_url = "https://web.kick.com/api/v1/livestreams?limit=24&sort=viewer_count_desc&category_id=28"
@@ -22,14 +24,16 @@ while True:
     else:
         url = base_url
 
-    response = requests.get(
-        url,
-        headers=headers,
-        impersonate="chrome110",
-        timeout=30
-    )
+    try:
+        response = requests.get(url, headers=headers, impersonate="chrome110", timeout=30)
+        if response.status_code != 200:
+            print(f"ошибка: статус {response.status_code}")
+            break
+        data = response.json()
+    except Exception as e:
+        print(f"ошибка запроса: {e}")
+        break
 
-    data = response.json()
     livestreams = data.get("data", {}).get("livestreams", [])
 
     for stream in livestreams:
@@ -40,11 +44,7 @@ while True:
         if viewer_count < 1000:
             if username not in seen_usernames and username != "Неизвестно":
                 seen_usernames.add(username)
-                streamer_data = {
-                    "username": username,
-                    "viewer_count": viewer_count
-                }
-                all_streamers.append(streamer_data)
+                all_streamers.append({"username": username, "viewer_count": viewer_count})
 
     pagination = data.get("data", {}).get("pagination", {})
     cursor = pagination.get("next_cursor")
@@ -54,7 +54,6 @@ while True:
 
     page += 1
 
-script_dir = os.getcwd()
 output_path = os.path.join(script_dir, "data", "data.json")
 os.makedirs(os.path.dirname(output_path), exist_ok=True)
 
@@ -71,66 +70,32 @@ for streamer in all_streamers:
     url_contact = f"https://kick.com/{username}/about"
 
     try:
-        response = requests.get(
-            url_contact,
-            headers=headers,
-            impersonate="chrome110",
-            timeout=30
-        )
-
+        response = requests.get(url_contact, headers=headers, impersonate="chrome110", timeout=30)
         html = response.text
 
-        social_links = {
-            "tiktok": None,
-            "instagram": None,
-            "twitter": None,
-            "youtube": None,
-            "twitch": None,
-            "telegram": None
+        social_links = {"tiktok": None, "instagram": None, "twitter": None, "youtube": None, "twitch": None, "telegram": None}
+
+        patterns = {
+            "tiktok": r'https?://(?:www\.)?tiktok\.com/[^\s"\'<>]+',
+            "instagram": r'https?://(?:www\.)?instagram\.com/[^\s"\'<>]+',
+            "twitter": r'https?://(?:www\.)?(?:twitter|x)\.com/[^\s"\'<>]+',
+            "youtube": r'https?://(?:www\.)?(?:youtube\.com|youtu\.be)/[^\s"\'<>]+',
+            "twitch": r'https?://(?:www\.)?twitch\.tv/[^\s"\'<>]+',
+            "telegram": r'https?://(?:t\.me|telegram\.me)/[^\s"\'<>]+'
         }
 
-        tiktok_pattern = r'https?://(?:www\.)?tiktok\.com/[^\s"\'<>]+'
-        instagram_pattern = r'https?://(?:www\.)?instagram\.com/[^\s"\'<>]+'
-        twitter_pattern = r'https?://(?:www\.)?(?:twitter|x)\.com/[^\s"\'<>]+'
-        youtube_pattern = r'https?://(?:www\.)?(?:youtube|youtu\.be)/[^\s"\'<>]+'
-        twitch_pattern = r'https?://(?:www\.)?twitch\.tv/[^\s"\'<>]+'
-        telegram_pattern = r'https?://(?:t\.me|telegram\.me)/[^\s"\'<>]+'
-
-        tiktok_match = re.search(tiktok_pattern, html)
-        instagram_match = re.search(instagram_pattern, html)
-        twitter_match = re.search(twitter_pattern, html)
-        youtube_match = re.search(youtube_pattern, html)
-        twitch_match = re.search(twitch_pattern, html)
-        telegram_match = re.search(telegram_pattern, html)
-
-        if tiktok_match and "kick" not in tiktok_match.group().lower():
-            social_links["tiktok"] = tiktok_match.group()
-        if instagram_match and "kick" not in instagram_match.group().lower():
-            social_links["instagram"] = instagram_match.group()
-        if twitter_match and "kick" not in twitter_match.group().lower():
-            social_links["twitter"] = twitter_match.group()
-        if youtube_match and "kick" not in youtube_match.group().lower():
-            social_links["youtube"] = youtube_match.group()
-        if twitch_match and "kick" not in twitch_match.group().lower():
-            social_links["twitch"] = twitch_match.group()
-        if telegram_match and "kick" not in telegram_match.group().lower():
-            social_links["telegram"] = telegram_match.group()
+        for social, pattern in patterns.items():
+            match = re.search(pattern, html)
+            if match and "kick" not in match.group().lower():
+                social_links[social] = match.group()
 
         contacts[username] = social_links
-
         print(f"обработан: {username}")
         time.sleep(0.5)
 
     except Exception as e:
         print(f"ошибка при обработке {username}: {e}")
-        contacts[username] = {
-            "tiktok": None,
-            "instagram": None,
-            "twitter": None,
-            "youtube": None,
-            "twitch": None,
-            "telegram": None
-        }
+        contacts[username] = {key: None for key in social_links}
 
 contact_path = os.path.join(script_dir, "data", "contacts.json")
 with open(contact_path, "w", encoding="utf-8") as f:
@@ -139,14 +104,8 @@ with open(contact_path, "w", encoding="utf-8") as f:
 print(f"контакты сохранены в {contact_path}")
 
 print("\nстатистика контактов:")
-stats = {
-    "tiktok": 0,
-    "instagram": 0,
-    "twitter": 0,
-    "youtube": 0,
-    "twitch": 0,
-    "telegram": 0
-}
+stats = {key: 0 for key in contacts[next(iter(contacts))] if contacts[next(iter(contacts))] is not None}
+stats = {key: 0 for key in ["tiktok", "instagram", "twitter", "youtube", "twitch", "telegram"]}
 
 for username, links in contacts.items():
     for social, link in links.items():
