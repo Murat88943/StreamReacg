@@ -1,0 +1,22 @@
+FROM python:3.12-slim
+
+WORKDIR /app
+
+RUN apt-get update && apt-get install -y \
+    wget \
+    gnupg \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN pip install --no-cache-dir \
+    playwright \
+    curl_cffi \
+    requests \
+    && playwright install chromium \
+    && playwright install-deps
+
+COPY parser/ ./parser/
+COPY mailers/ ./mailers/
+
+WORKDIR /app/mailers
+
+CMD ["python", "mailingService.py"]
