@@ -1,116 +1,111 @@
 import json
-from curl_cffi import requests
 import os
 import re
 import time
+from curl_cffi import requests
 
-script_dir = os.path.dirname(os.path.abspath(__file__))
+data_dir = "data"
+os.makedirs(data_dir, exist_ok=True)
 
-with open(os.path.join(script_dir, "config.json"), "r", encoding="utf-8") as file:
-    headers = json.load(file)
+headers = {
+    "user-agent": "mozilla/5.0 (windows nt 10.0; win64; x64) applewebkit/537.36 (khtml, like gecko) chrome/120.0.0.0 safari/537.36",
+    "accept": "application/json",
+    "referer": "https://kick.com/"
+}
 
 base_url = "https://web.kick.com/api/v1/livestreams?limit=24&sort=viewer_count_desc&category_id=28"
 
-cursor = ""
-page = 1
 all_streamers = []
 seen_usernames = set()
-
-print("сбор стримеров...")
+cursor = None
 
 while True:
+    url = base_url
     if cursor:
         url = f"{base_url}&after={cursor}"
-    else:
-        url = base_url
 
     try:
         response = requests.get(url, headers=headers, impersonate="chrome110", timeout=30)
         if response.status_code != 200:
-            print(f"ошибка: статус {response.status_code}")
             break
         data = response.json()
-    except Exception as e:
-        print(f"ошибка запроса: {e}")
+    except:
         break
 
-    livestreams = data.get("data", {}).get("livestreams", [])
+    payload = data.get("data") or {}
+    livestreams = payload.get("livestreams") or []
+
+    if not livestreams:
+        break
 
     for stream in livestreams:
-        channel = stream.get("channel", {})
-        username = channel.get("slug") or channel.get("username", "Неизвестно")
-        viewer_count = stream.get("viewer_count", 0)
+        if not isinstance(stream, dict):
+            continue
+        channel = stream.get("channel") or {}
+        username = channel.get("slug") or channel.get("username") or ""
+        username = str(username).strip()
+        if not username:
+            continue
+        try:
+            viewer_count = int(stream.get("viewer_count") or 0)
+        except:
+            viewer_count = 0
+        if viewer_count >= 1000:
+            continue
+        key = username.lower()
+        if key in seen_usernames:
+            continue
+        seen_usernames.add(key)
+        all_streamers.append({"username": username, "viewer_count": viewer_count})
 
-        if viewer_count < 1000:
-            if username not in seen_usernames and username != "Неизвестно":
-                seen_usernames.add(username)
-                all_streamers.append({"username": username, "viewer_count": viewer_count})
-
-    pagination = data.get("data", {}).get("pagination", {})
-    cursor = pagination.get("next_cursor")
-
-    if not cursor:
+    pagination = payload.get("pagination") or {}
+    next_cursor = pagination.get("next_cursor")
+    if not next_cursor or next_cursor == cursor:
         break
+    cursor = next_cursor
+    time.sleep(0.5)
 
-    page += 1
-
-output_path = os.path.join(script_dir, "data", "data.json")
-os.makedirs(os.path.dirname(output_path), exist_ok=True)
-
-with open(output_path, "w", encoding="utf-8") as f:
+data_path = os.path.join(data_dir, "data.json")
+with open(data_path, "w", encoding="utf-8") as f:
     json.dump(all_streamers, f, ensure_ascii=False, indent=2)
 
-print(f"собрано стримеров: {len(all_streamers)}")
-
-print("парсинг контактов...")
 contacts = {}
 
+social_patterns = {
+    "instagram": r'https?://(?:www\.)?instagram\.com/[a-zA-Z0-9._-]+/?',
+    "twitter": r'https?://(?:www\.)?(?:twitter|x)\.com/[a-zA-Z0-9._-]+/?',
+    "tiktok": r'https?://(?:www\.)?tiktok\.com/@?[a-zA-Z0-9._-]+/?'
+}
+
+def extract_social_links(html):
+    social_links = {"instagram": None, "twitter": None, "tiktok": None}
+    for social, pattern in social_patterns.items():
+        matches = re.findall(pattern, html, re.IGNORECASE)
+        for link in matches:
+            link = link.rstrip(".,);]}>\"'/")
+            if "kick" not in link.lower():
+                social_links[social] = link
+                break
+    return social_links
+
 for streamer in all_streamers:
-    username = streamer['username']
-    url_contact = f"https://kick.com/{username}/about"
+    username = streamer["username"]
+    about_url = f"https://kick.com/{username}/about"
 
     try:
-        response = requests.get(url_contact, headers=headers, impersonate="chrome110", timeout=30)
+        response = requests.get(about_url, headers=headers, impersonate="chrome110", timeout=30)
+        if response.status_code != 200:
+            contacts[username] = {"instagram": None, "twitter": None, "tiktok": None}
+            continue
+
         html = response.text
-
-        social_links = {"tiktok": None, "instagram": None, "twitter": None, "youtube": None, "twitch": None, "telegram": None}
-
-        patterns = {
-            "tiktok": r'https?://(?:www\.)?tiktok\.com/[^\s"\'<>]+',
-            "instagram": r'https?://(?:www\.)?instagram\.com/[^\s"\'<>]+',
-            "twitter": r'https?://(?:www\.)?(?:twitter|x)\.com/[^\s"\'<>]+',
-            "youtube": r'https?://(?:www\.)?(?:youtube\.com|youtu\.be)/[^\s"\'<>]+',
-            "twitch": r'https?://(?:www\.)?twitch\.tv/[^\s"\'<>]+',
-            "telegram": r'https?://(?:t\.me|telegram\.me)/[^\s"\'<>]+'
-        }
-
-        for social, pattern in patterns.items():
-            match = re.search(pattern, html)
-            if match and "kick" not in match.group().lower():
-                social_links[social] = match.group()
-
+        social_links = extract_social_links(html)
         contacts[username] = social_links
-        print(f"обработан: {username}")
-        time.sleep(0.5)
+        time.sleep(0.3)
 
-    except Exception as e:
-        print(f"ошибка при обработке {username}: {e}")
-        contacts[username] = {key: None for key in social_links}
+    except:
+        contacts[username] = {"instagram": None, "twitter": None, "tiktok": None}
 
-contact_path = os.path.join(script_dir, "data", "contacts.json")
-with open(contact_path, "w", encoding="utf-8") as f:
+contacts_path = os.path.join(data_dir, "contacts.json")
+with open(contacts_path, "w", encoding="utf-8") as f:
     json.dump(contacts, f, ensure_ascii=False, indent=2)
-
-print(f"контакты сохранены в {contact_path}")
-
-print("\nстатистика контактов:")
-stats = {key: 0 for key in contacts[next(iter(contacts))] if contacts[next(iter(contacts))] is not None}
-stats = {key: 0 for key in ["tiktok", "instagram", "twitter", "youtube", "twitch", "telegram"]}
-
-for username, links in contacts.items():
-    for social, link in links.items():
-        if link:
-            stats[social] += 1
-
-for social, count in stats.items():
-    print(f"  {social}: {count}")
